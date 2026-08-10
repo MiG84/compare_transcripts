@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.idea/
+.vscode/
+.DS_Store
+
+# Vhodni in izhodni podatki (transkripti, podnapisi, poročila)
+*.docx
+*.vtt
+*.json
+*.md
+!README.md
