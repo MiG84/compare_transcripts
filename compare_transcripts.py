@@ -7,7 +7,7 @@ in ju primerja tudi med seboj (TRENUTNI vs NOV, brez reference).
 Izpiše odstotke podobnosti in kategorizirane razlike.
 
 Uporaba:
-    python3 compare_transcripts.py --nov pot/do/nov.docx --trenutni pot/do/trenutni.docx --vtt pot/do/podnapisi.vtt
+    python compare_transcripts.py --nov pot/do/nov.docx --trenutni pot/do/trenutni.docx --vtt pot/do/podnapisi.vtt
 
 Podprti formati vhodnih datotek:
     .docx  → Word dokument
@@ -233,7 +233,7 @@ def pct(value: float) -> float:
     return round(value, PCT_DECIMALS)
 
 def fmt_pct(value: float) -> str:
-    return f"{pct(value):.{PCT_DECIMALS}f}%"
+    return f"{pct(value):.{PCT_DECIMALS}f} %"
 
 def margin(sim_a: float, sim_b: float) -> float:
     """Razlika med podobnostma, izračunana iz izpisanih (zaokroženih) vrednosti."""
@@ -333,9 +333,95 @@ def md_breakdown(stats: dict, total_ref: int, osnova: str = "reference") -> list
     lines.append("|---|---:|---:|---:|\n")
     for key, _, naslov in BREAKDOWN_ROWS:
         lines.append(f"| {naslov} | {stats[key]} | {stats[key+'_tokens']} | "
-                     f"{stats[key+'_tokens']/max(total_ref,1)*100:.1f}% |\n")
+                     f"{stats[key+'_tokens']/max(total_ref,1)*100:.1f} % |\n")
     lines.append(f"| _Skupaj_ | {stats['total_diff_blocks']} | {stats['total_diff_tokens']} | "
-                 f"{stats['total_diff_tokens']/max(total_ref,1)*100:.1f}% |\n")
+                 f"{stats['total_diff_tokens']/max(total_ref,1)*100:.1f} % |\n")
+    return lines
+
+
+def md_interpretation(stats_nov: dict, stats_curr: dict, stats_cross: dict, n_vtt: int) -> list:
+    """
+    Kratka razlaga, kaj izmerjene razlike pomenijo.
+    Prvi del je stalen (pomen meritev), ugotovitve na koncu pa so izračunane
+    iz dejanskih številk te primerjave.
+    """
+    z_referenco = stats_nov is not None
+    lines = ["\n## Kaj te razlike pomenijo\n"]
+
+    lines.append("\n**Podobnost** je delež ujemajočih se besed, pri čemer `sodišču,` in `sodišču;` "
+                 "štejeta za različni besedi. Meri torej, koliko dela je za popravljanje besedila — "
+                 "ne samo natančnosti prepoznave govora.\n")
+    lines.append("\n**Vsebinske razlike** so najbližje kakovosti prepisa: napačno prepoznane in "
+                 "izpuščene besede. Ker se kategorija pripiše celemu bloku razlike, je ta številka "
+                 "zgornja meja — v daljših blokih je lahko zraven tudi kakšno ločilo.\n")
+    lines.append("\n**Samo ločila** ne spremenijo pomena — to je oblika (vejice, velike začetnice, "
+                 "pomišljaji). Odstotek podobnosti jih kaznuje enako kot napačne besede.\n")
+    if z_referenco:
+        lines.append("\n**Okrajšave** in **zapis številk** sta dogovorni razliki: podnapisi pišejo "
+                     "`oziroma` in `devetnajst štiriinosemdeset`, transkript pa `oz.` in `1984`. "
+                     "To ni napaka prepoznave in se da odpraviti z normalizacijo.\n")
+    else:
+        lines.append("\n**Okrajšave** in **zapis številk** sta dogovorni razliki: en transkript piše "
+                     "`oziroma` in `devetnajst štiriinosemdeset`, drugi `oz.` in `1984`. "
+                     "To ni napaka prepoznave in se da odpraviti z normalizacijo.\n")
+
+    if not z_referenco:
+        lines.append("\n**Manjkajoče/dodane besede** so besede, ki jih ima ena stran primerjave, "
+                     "druga pa ne. Osnova je TRENUTNI.\n")
+        lines.append("\n> Brez VTT reference te številke povedo samo, **kje** se transkripta razhajata, "
+                     "ne **kdo** se moti. Za oceno pravilnosti je potrebna referenca.\n")
+        return lines
+
+    lines.append("\n**Manjkajoče besede** so izgubljena vsebina (v referenci so, v transkriptu ne), "
+                 "**dodane** pa besede, ki jih referenca ne vsebuje.\n")
+
+    lines.append("\n### Ko primerjaš vse tri\n")
+    lines.append("\nNajpomembnejše: **VTT podnapisi niso dobesedni prepis.** Uredniško so skrajšani in "
+                 "zglajeni, zato del izmerjene razlike ni napaka transkripta, ampak posledica krajšanja "
+                 "podnapisov. Zato sam odstotek podobnosti z VTT ni ocena kakovosti prepoznave.\n")
+    lines.append("\nTu pomaga medsebojna primerjava:\n")
+    lines.append("\n- kjer se transkripta **strinjata med seboj**, a se oba razlikujeta od VTT, je razlika "
+                 "najverjetneje v podnapisih (krajšanje, drugačna ločila);\n")
+    lines.append("- kjer se transkripta **razhajata**, se eden od njiju moti — to so mesta za ročni pregled.\n")
+
+    # ── Ugotovitve iz teh konkretnih številk ──
+    sim_nov   = stats_nov["ratio"]   * 100
+    sim_curr  = stats_curr["ratio"]  * 100
+    sim_cross = stats_cross["ratio"] * 100
+
+    lines.append("\n### Ugotovitve za te datoteke\n\n")
+
+    n_diff, c_diff = stats_nov["word_diff_tokens"], stats_curr["word_diff_tokens"]
+    if min(n_diff, c_diff) > 0:
+        boljsi, slabsi = ("TRENUTNI", "NOV") if c_diff < n_diff else ("NOV", "TRENUTNI")
+        manj, vec = min(n_diff, c_diff), max(n_diff, c_diff)
+        lines.append(f"- Po vsebini je referenci bližje **{boljsi}**: {manj} besed vsebinskih razlik "
+                     f"({manj/max(n_vtt,1)*100:.1f} % reference) proti {vec} "
+                     f"({vec/max(n_vtt,1)*100:.1f} %) — {(vec/manj - 1)*100:.0f} % več pri {slabsi}.\n")
+
+    n_del, c_del = stats_nov["deleted"], stats_curr["deleted"]
+    if abs(n_del - c_del) >= 20 and max(n_del, c_del) >= 2 * max(min(n_del, c_del), 1):
+        kdo, koliko, drugi, drugi_n = (("NOV", n_del, "TRENUTNI", c_del) if n_del > c_del
+                                       else ("TRENUTNI", c_del, "NOV", n_del))
+        lines.append(f"- **{kdo}** izpušča {koliko} besed reference ({drugi} samo {drugi_n}) — "
+                     f"to ni napaka prepoznave, ampak izgubljena vsebina.\n")
+
+    n_locila, c_locila = stats_nov["punct_only_tokens"], stats_curr["punct_only_tokens"]
+    lines.append(f"- Razlik samo v ločilih: NOV {n_locila} besed, TRENUTNI {c_locila}. "
+                 f"Te znižujejo odstotek podobnosti, pomena pa ne spremenijo — zato lahko transkript "
+                 f"z manj vsebinskih napak izgleda slabši, če ima slabša ločila.\n")
+
+    n_stil = stats_nov["abbreviation_tokens"] + stats_nov["number_format_tokens"]
+    c_stil = stats_curr["abbreviation_tokens"] + stats_curr["number_format_tokens"]
+    lines.append(f"- Dogovornih razlik (okrajšave + zapis številk): NOV {n_stil} besed, "
+                 f"TRENUTNI {c_stil}. Odpravljive z normalizacijo, brez posega v prepoznavo.\n")
+
+    najslabsi = min(sim_nov, sim_curr)
+    if pct(sim_cross) > pct(najslabsi):
+        lines.append(f"- Transkripta sta si med seboj bolj podobna ({fmt_pct(sim_cross)}) kot je slabši "
+                     f"od njiju podoben referenci ({fmt_pct(najslabsi)}). Del razlike do VTT je torej "
+                     f"skupen obema in najverjetneje izhaja iz krajšanja podnapisov, ne iz napak prepoznave.\n")
+
     return lines
 
 
@@ -350,29 +436,42 @@ def md_cross_metrics(stats: dict) -> list:
         return f"{stats[key+'_tokens']} ({stats[key+'_tokens']/osnova*100:.1f} %)"
 
     vrstice = [
-        ("Dolžina TRENUTNI (besed)",             f"{stats['a_len']}"),
-        ("Dolžina NOV (besed)",                  f"{stats['b_len']} "
+        ("SKUPINA", "Obseg — besed"),
+        ("Dolžina TRENUTNI",                     f"{stats['a_len']}"),
+        ("Dolžina NOV",                          f"{stats['b_len']} "
                                                  f"({stats['b_len'] - stats['a_len']:+d})"),
+
+        ("SKUPINA", "Ujemanje"),
         ("**Podobnost TRENUTNI ↔ NOV**",         f"**{fmt_pct(stats['ratio']*100)}**"),
         ("Razlika",                              fmt_pct(100 - stats['ratio']*100)),
-        ("**Vsebinske razlike (besed)**",        f"**{besede('word_diff')}**"),
-        ("Samo ločila (besed)",                  besede("punct_only")),
-        ("Zapis številk (besed)",                besede("number_format")),
-        ("Okrajšave (besed)",                    besede("abbreviation")),
-        ("Skupaj razlik (besed)",                f"{stats['total_diff_tokens']} "
-                                                 f"({stats['total_diff_tokens']/osnova*100:.1f} %)"),
-        ("Zamenjane besede",                     f"{stats['replaced']}"),
-        ("V TRENUTNI, ni v NOV",                 f"{stats['deleted']}"),
-        ("V NOV, ni v TRENUTNI",                 f"{stats['inserted']}"),
+
+        ("SKUPINA", "Razlike po kategorijah — besed (% dolžine TRENUTNI)"),
+        ("**Vsebinske razlike** (napačne/izpuščene besede)", f"**{besede('word_diff')}**"),
+        ("Samo ločila (ne spremeni pomena)",     besede("punct_only")),
+        ("Zapis številk (dogovorno)",            besede("number_format")),
+        ("Okrajšave (dogovorno)",                besede("abbreviation")),
+        ("_Skupaj razlik_",                      f"_{stats['total_diff_tokens']} "
+                                                 f"({stats['total_diff_tokens']/osnova*100:.1f} %)_"),
+
+        ("SKUPINA", "Poravnava — besed"),
         ("Enake besede",                         f"{stats['equal']}"),
-        ("_Blokov razlik (informativno)_",       f"_{stats['total_diff_blocks']}_"),
+        ("Zamenjane besede",                     f"{stats['replaced']}"),
+        ("Samo v TRENUTNI (ni v NOV)",           f"{stats['deleted']}"),
+        ("Samo v NOV (ni v TRENUTNI)",           f"{stats['inserted']}"),
+
+        ("SKUPINA", "Diagnostika — ni primerljivo"),
+        ("_Blokov razlik_",                      f"_{stats['total_diff_blocks']}_"),
     ]
 
     lines = ["\n| Meritev | Vrednost |\n", "|---|---:|\n"]
     for naslov, vrednost in vrstice:
-        lines.append(f"| {naslov} | {vrednost} |\n")
-    lines.append("\n> Odstotki so glede na dolžino TRENUTNI. Brez reference ni zmagovalca — "
-                 "razlike kažejo le, kje se transkripta razhajata.\n")
+        if naslov == "SKUPINA":
+            lines.append(f"| **{vrednost}** | |\n")
+        else:
+            lines.append(f"| {naslov} | {vrednost} |\n")
+    lines.append(f"\n_Odstotki so glede na dolžino TRENUTNI ({stats['a_len']} besed). "
+                 "Kategorije se seštejejo v »Skupaj razlik«._\n")
+    lines.append("\n> Brez reference ni zmagovalca — razlike kažejo le, kje se transkripta razhajata.\n")
     return lines
 
 
@@ -382,29 +481,100 @@ def md_side_by_side(stats_nov: dict, stats_curr: dict, n_vtt: int) -> list:
     Transponirana (meritve v vrsticah), da je stolpca NOV in TRENUTNI mogoče
     brati neposredno drug proti drugemu.
     """
-    def besede(stats, key):
-        return f"{stats[key+'_tokens']} ({stats[key+'_tokens']/max(n_vtt,1)*100:.1f} %)"
+    def odstotek(n: int) -> str:
+        return f"{n/max(n_vtt,1)*100:.1f} %"
 
+    def besede(key: str, stats: dict) -> str:
+        return f"{stats[key+'_tokens']} ({odstotek(stats[key+'_tokens'])})"
+
+    def razlika(a, b, enota: str = "") -> str:
+        """Razlika NOV − TRENUTNI, s predznakom. Prazna, kadar ni smiselna."""
+        d = a - b
+        if isinstance(a, float) or isinstance(b, float):
+            return "—" if abs(d) < 0.005 else f"{d:+.{PCT_DECIMALS}f}{enota}"
+        return "—" if d == 0 else f"{d:+d}{enota}"
+
+    def boljsi(a, b, manj_je_bolje: bool = True) -> str:
+        """Kateri od transkriptov je po tej meritvi bližje referenci."""
+        if a == b:
+            return "izenačeno"
+        nov_boljsi = (a < b) if manj_je_bolje else (a > b)
+        return "NOV" if nov_boljsi else "TRENUTNI"
+
+    n_odmik = stats_nov["b_len"]  - n_vtt   # odmik dolžine od reference
+    c_odmik = stats_curr["b_len"] - n_vtt
+
+    # (naslov, vrednost NOV, vrednost TRENUTNI, razlika, bližje referenci)
     vrstice = [
-        ("Dolžina (besed)",                 lambda s: f"{s['b_len']}"),
-        ("**Podobnost z VTT**",             lambda s: f"**{fmt_pct(s['ratio']*100)}**"),
-        ("Razlika",                         lambda s: fmt_pct(100 - s['ratio']*100)),
-        ("**Vsebinske napake (besed)**",    lambda s: f"**{besede(s, 'word_diff')}**"),
-        ("Samo ločila (besed)",             lambda s: besede(s, "punct_only")),
-        ("Zapis številk (besed)",           lambda s: besede(s, "number_format")),
-        ("Okrajšave (besed)",               lambda s: besede(s, "abbreviation")),
-        ("Skupaj razlik (besed)",           lambda s: f"{s['total_diff_tokens']} "
-                                                     f"({s['total_diff_tokens']/max(n_vtt,1)*100:.1f} %)"),
-        ("Zamenjane besede",                lambda s: f"{s['replaced']}"),
-        ("Manjkajoče besede (izpuščene)",   lambda s: f"{s['deleted']}"),
-        ("Dodane besede (ni v referenci)",  lambda s: f"{s['inserted']}"),
-        ("Enake besede",                    lambda s: f"{s['equal']}"),
-        ("_Blokov razlik (informativno)_",  lambda s: f"_{s['total_diff_blocks']}_"),
+        ("SKUPINA", "Podobnost z referenco", "", "", ""),
+        ("**Podobnost z VTT**",
+         f"**{fmt_pct(stats_nov['ratio']*100)}**", f"**{fmt_pct(stats_curr['ratio']*100)}**",
+         razlika(pct(stats_nov['ratio']*100), pct(stats_curr['ratio']*100), " t.t."),
+         f"**{boljsi(stats_nov['ratio'], stats_curr['ratio'], manj_je_bolje=False)}**"),
+        ("Razlika do reference",
+         fmt_pct(100 - stats_nov['ratio']*100), fmt_pct(100 - stats_curr['ratio']*100), "—", "—"),
+
+        ("SKUPINA", "Razlike po kategorijah — besed (% reference), manj je bolje", "", "", ""),
+        ("**Vsebinske napake** (napačne/izpuščene besede)",
+         f"**{besede('word_diff', stats_nov)}**", f"**{besede('word_diff', stats_curr)}**",
+         razlika(stats_nov['word_diff_tokens'], stats_curr['word_diff_tokens']),
+         f"**{boljsi(stats_nov['word_diff_tokens'], stats_curr['word_diff_tokens'])}**"),
+        ("Samo ločila (ne spremeni pomena)",
+         besede("punct_only", stats_nov), besede("punct_only", stats_curr),
+         razlika(stats_nov['punct_only_tokens'], stats_curr['punct_only_tokens']),
+         boljsi(stats_nov['punct_only_tokens'], stats_curr['punct_only_tokens'])),
+        ("Zapis številk (dogovorno)",
+         besede("number_format", stats_nov), besede("number_format", stats_curr),
+         razlika(stats_nov['number_format_tokens'], stats_curr['number_format_tokens']),
+         boljsi(stats_nov['number_format_tokens'], stats_curr['number_format_tokens'])),
+        ("Okrajšave (dogovorno)",
+         besede("abbreviation", stats_nov), besede("abbreviation", stats_curr),
+         razlika(stats_nov['abbreviation_tokens'], stats_curr['abbreviation_tokens']),
+         boljsi(stats_nov['abbreviation_tokens'], stats_curr['abbreviation_tokens'])),
+        ("_Skupaj razlik_",
+         f"_{stats_nov['total_diff_tokens']} ({odstotek(stats_nov['total_diff_tokens'])})_",
+         f"_{stats_curr['total_diff_tokens']} ({odstotek(stats_curr['total_diff_tokens'])})_",
+         f"_{razlika(stats_nov['total_diff_tokens'], stats_curr['total_diff_tokens'])}_",
+         f"_{boljsi(stats_nov['total_diff_tokens'], stats_curr['total_diff_tokens'])}_"),
+
+        ("SKUPINA", "Poravnava z referenco — besed", "", "", ""),
+        ("Enake besede",
+         f"{stats_nov['equal']}", f"{stats_curr['equal']}",
+         razlika(stats_nov['equal'], stats_curr['equal']),
+         boljsi(stats_nov['equal'], stats_curr['equal'], manj_je_bolje=False)),
+        ("Zamenjane besede",
+         f"{stats_nov['replaced']}", f"{stats_curr['replaced']}",
+         razlika(stats_nov['replaced'], stats_curr['replaced']),
+         boljsi(stats_nov['replaced'], stats_curr['replaced'])),
+        ("Manjkajoče besede (izpuščena vsebina)",
+         f"{stats_nov['deleted']}", f"{stats_curr['deleted']}",
+         razlika(stats_nov['deleted'], stats_curr['deleted']),
+         boljsi(stats_nov['deleted'], stats_curr['deleted'])),
+        ("Dodane besede (ni v referenci)",
+         f"{stats_nov['inserted']}", f"{stats_curr['inserted']}",
+         razlika(stats_nov['inserted'], stats_curr['inserted']),
+         boljsi(stats_nov['inserted'], stats_curr['inserted'])),
+        ("Dolžina transkripta (odmik od reference)",
+         f"{stats_nov['b_len']} ({n_odmik:+d})", f"{stats_curr['b_len']} ({c_odmik:+d})",
+         razlika(stats_nov['b_len'], stats_curr['b_len']),
+         boljsi(abs(n_odmik), abs(c_odmik))),
+
+        ("SKUPINA", "Diagnostika — ni primerljivo med transkriptoma", "", "", ""),
+        ("_Blokov razlik_",
+         f"_{stats_nov['total_diff_blocks']}_", f"_{stats_curr['total_diff_blocks']}_", "—", "—"),
     ]
 
-    lines = ["\n| Meritev | NOV | TRENUTNI |\n", "|---|---:|---:|\n"]
-    for naslov, vrednost in vrstice:
-        lines.append(f"| {naslov} | {vrednost(stats_nov)} | {vrednost(stats_curr)} |\n")
+    lines = ["\n| Meritev | NOV | TRENUTNI | Razlika | Bližje referenci |\n",
+             "|---|---:|---:|---:|:---:|\n"]
+    for naslov, v_nov, v_curr, v_razlika, v_boljsi in vrstice:
+        if naslov == "SKUPINA":
+            lines.append(f"| **{v_nov}** | | | | |\n")
+        else:
+            lines.append(f"| {naslov} | {v_nov} | {v_curr} | {v_razlika} | {v_boljsi} |\n")
+
+    lines.append("\n_Stolpec **Razlika** je NOV − TRENUTNI; `t.t.` = odstotne točke. "
+                 "Odstotki v oklepajih so glede na dolžino reference "
+                 f"({n_vtt} besed). Kategorije se seštejejo v »Skupaj razlik«._\n")
     return lines
 
 
@@ -474,6 +644,7 @@ def build_markdown_report(stats_nov: dict, stats_curr: dict, stats_cross: dict,
         lines.append("_Brez VTT reference — spodnje številke povedo samo, kako daleč sta "
                      "transkripta drug od drugega, ne kateri je pravilnejši._\n")
         lines.extend(md_cross_metrics(stats_cross))
+        lines.extend(md_interpretation(None, None, stats_cross, 0))
         return "".join(lines)
 
     sim_nov  = stats_nov["ratio"]  * 100
@@ -495,6 +666,10 @@ def build_markdown_report(stats_nov: dict, stats_curr: dict, stats_cross: dict,
         lines.append(f"**Izenačeno** — oba transkripta sta {fmt_pct(sim_nov)} podobna referenci.\n")
     else:
         lines.append(f"**{winner}** (za {diff:.{PCT_DECIMALS}f} odstotne točke boljši kot drugi)\n")
+    lines.append("\n_Zmagovalec je izbran po odstotku podobnosti z VTT — glej razlago spodaj, "
+                 "zakaj to ni isto kot »boljši prepis«._\n")
+
+    lines.extend(md_interpretation(stats_nov, stats_curr, stats_cross, n_vtt))
 
     return "".join(lines)
 
